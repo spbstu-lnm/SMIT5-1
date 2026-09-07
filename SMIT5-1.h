@@ -36,6 +36,7 @@
 
 #include <cstdio>	// REPLACED
 #include <cstdlib>	// ADDED
+#include <expected>	// ADDED
 
 #include <chrono>	// ADDED
 
@@ -62,24 +63,24 @@ constexpr auto MAX_FS_NAME_LENGTH = (8);
 
 
 struct OSInfo {
-	ULONG dwMajorVersion = 0;
-	ULONG dwMinorVersion = 0;
-	ULONG dwBuildNumber = 0;
+	uint32_t dwMajorVersion = 0;
+	uint32_t dwMinorVersion = 0;
+	uint32_t dwBuildNumber = 0;
 };
 
 struct timeInfo {
 	uint64_t unixTime = 0;
-	ULONGLONG msSinceStartup = 0;
+	uint64_t msSinceStartup = 0;
 };
 
 struct memoryInfo {
-	ULONGLONG totalRamKB = 0;
-	ULONGLONG freeRamBytes = 0;
+	uint64_t totalRamKB = 0;
+	uint64_t freeRamBytes = 0;
 };
 
 struct diskInfo {
 	wchar_t* fileSystemNames[MAX_DISKS_COUNT][MAX_FS_NAME_LENGTH] = { 0 };
-	UINT* diskTypes[MAX_DISKS_COUNT] = { 0 };
+	uint32_t* diskTypes[MAX_DISKS_COUNT] = { 0 };
 };
 
 // each ACE is a separate struct instance
@@ -97,3 +98,11 @@ struct ownerInfo {
 	PSID ownerSID = 0;
 	wchar_t* ownerName[UNLEN] = { 0 };
 };
+
+enum class ReturnCode {
+	Success,
+	// TODO
+	UnexpectedError
+};
+
+typedef NTSTATUS(WINAPI* PFN_RtlGetVersion)(POSVERSIONINFOW);

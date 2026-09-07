@@ -104,6 +104,7 @@
 
 
 // CONSTANTS	===============================================================
+// also see header file
 // TODO
 
 
@@ -111,12 +112,44 @@
 // TODO
 
 
-// STRUCTS	===================================================================
-// TODO
+// STRUCTS definition in header file
 
 
 // FUNCTIONS	===============================================================
-// TODO
+// ==== Gathering functions
+static std::expected<struct OSInfo, ReturnCode> gatherOSInfo(void) {
+	struct OSInfo res;
+	
+	HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+	if (!hNtdll) {
+		printf("FAIL: Unable to get ntdll.dll");
+		return std::unexpected(ReturnCode::UnexpectedError);
+	}
+
+	auto pRtlGetVersion = reinterpret_cast<PFN_RtlGetVersion>(
+		GetProcAddress(hNtdll, "RtlGetVersion")
+	);
+
+	if (!pRtlGetVersion) {
+		printf("FAIL: Couldn't resolve RtlGetVersion address");
+		return std::unexpected(ReturnCode::UnexpectedError);
+	}
+
+	RTL_OSVERSIONINFOW osvi = { 0 };
+	osvi.dwOSVersionInfoSize = sizeof(osvi);
+
+	if (BCRYPT_SUCCESS(pRtlGetVersion(&osvi))) {
+		res.dwMajorVersion = osvi.dwMajorVersion;
+		res.dwMinorVersion = osvi.dwMinorVersion;
+		res.dwBuildNumber = osvi.dwBuildNumber;
+	}
+	else {
+		printf("FAIL: RtlGetVersion failed");
+		return std::unexpected(ReturnCode::UnexpectedError);
+	}
+
+	return res;
+}
 
 
 int main(void)

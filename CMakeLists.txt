@@ -1,7 +1,7 @@
 ﻿# CMakeList.txt: проект CMake для SMIT5-1; включите исходный код и определения,
 # укажите здесь логику для конкретного проекта.
 #
-cmake_minimum_required (VERSION 3.10)
+cmake_minimum_required (VERSION 3.20)	# 3.20 required for C++23
 
 # Включение горячей перезагрузки для компиляторов MSVC, если поддерживается.
 if (POLICY CMP0141)
@@ -11,14 +11,13 @@ endif()
 
 project ("SMIT5-1")
 
+
 # added for the whole project
-add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX WIN32_NO_STATUS)
+
 
 # Добавьте источник в исполняемый файл этого проекта.
 add_executable (SMIT5-1 "SMIT5-1.cpp" "SMIT5-1.h")
-
-if (CMAKE_VERSION VERSION_GREATER 3.12)
-  set_property(TARGET SMIT5-1 PROPERTY CXX_STANDARD 20)
-endif()
-
-# TODO: Добавьте тесты и целевые объекты, если это необходимо.
