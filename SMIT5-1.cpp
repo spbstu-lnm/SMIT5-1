@@ -48,6 +48,10 @@
 		- owner of a file / folder / reg key
 
 	
+	PROTOCOL:
+		see structs in header file
+
+
 	GENERAL REQUIREMENTS:
 		- must use sockets (WinSock, not wrappers from MFC libs or similar)
 		
@@ -84,7 +88,7 @@
 			BCRYPT_AES_ALGORITHM + BCRYPT_CHAIN_MODE_GCM
 			256-bit key
 
-		- Assymetric: ECDH (Elliptic Curve Diffie-Hellman)
+		- Asymmetric: ECDH (Elliptic Curve Diffie-Hellman)
 			BCRYPT_ECDH_P384_ALGORITHM
 
 
@@ -107,11 +111,17 @@
 // TODO
 
 
+// STRUCTS	===================================================================
+// TODO
+
+
 // FUNCTIONS	===============================================================
 // TODO
 
 
 int main(void)
 {
+	// TODO
+
 	return EXIT_SUCCESS;
 }

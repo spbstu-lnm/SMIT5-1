@@ -11,6 +11,9 @@ endif()
 
 project ("SMIT5-1")
 
+# added for the whole project
+add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX)
+
 # Добавьте источник в исполняемый файл этого проекта.
 add_executable (SMIT5-1 "SMIT5-1.cpp" "SMIT5-1.h")
 
