@@ -101,6 +101,7 @@
 
 
 #include "SMIT5-1.h"
+#include "SharedStructs.h"
 
 
 // CONSTANTS	===============================================================
@@ -115,14 +116,22 @@
 // STRUCTS definition in header file
 
 
+// PROTOTYPES	===============================================================
+static std::expected<struct OSInfo, ReturnCode> gatherOSInfo(void);
+static std::expected<struct systemTimeInfo, ReturnCode> gatherUnixTime(void);
+static std::expected<struct uptimeInfo, ReturnCode> gatherUptime(void);
+static std::expected<struct memoryInfo, ReturnCode> gatherMemoryInfo(void);
+
+static ReturnCode localRun(void);
+
 // FUNCTIONS	===============================================================
 // ==== Gathering functions
 static std::expected<struct OSInfo, ReturnCode> gatherOSInfo(void) {
-	struct OSInfo res;
+	struct OSInfo osi;
 	
 	HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
 	if (!hNtdll) {
-		printf("FAIL: Unable to get ntdll.dll");
+		printf("FAIL: Unable to get ntdll.dll\n");
 		return std::unexpected(ReturnCode::UnexpectedError);
 	}
 
@@ -131,7 +140,7 @@ static std::expected<struct OSInfo, ReturnCode> gatherOSInfo(void) {
 	);
 
 	if (!pRtlGetVersion) {
-		printf("FAIL: Couldn't resolve RtlGetVersion address");
+		printf("FAIL: Couldn't resolve RtlGetVersion address\n");
 		return std::unexpected(ReturnCode::UnexpectedError);
 	}
 
@@ -139,21 +148,115 @@ static std::expected<struct OSInfo, ReturnCode> gatherOSInfo(void) {
 	osvi.dwOSVersionInfoSize = sizeof(osvi);
 
 	if (BCRYPT_SUCCESS(pRtlGetVersion(&osvi))) {
-		res.dwMajorVersion = osvi.dwMajorVersion;
-		res.dwMinorVersion = osvi.dwMinorVersion;
-		res.dwBuildNumber = osvi.dwBuildNumber;
+		osi.dwMajorVersion = osvi.dwMajorVersion;
+		osi.dwMinorVersion = osvi.dwMinorVersion;
+		osi.dwBuildNumber = osvi.dwBuildNumber;
 	}
 	else {
-		printf("FAIL: RtlGetVersion failed");
+		printf("FAIL: RtlGetVersion failed\n");
 		return std::unexpected(ReturnCode::UnexpectedError);
 	}
 
-	return res;
+	return osi;
+}
+
+
+static std::expected<struct systemTimeInfo, ReturnCode> gatherUnixTime(void) {
+	struct systemTimeInfo sti;
+
+	auto now = std::chrono::system_clock::now();
+
+	sti.time = std::chrono::duration_cast<std::chrono::seconds>(
+		now.time_since_epoch()
+	).count();
+
+	return sti;
+}
+
+
+static std::expected<struct uptimeInfo, ReturnCode> gatherUptime(void) {
+	struct uptimeInfo uti;
+	uti.uptime = GetTickCount64();
+
+	return uti;
+}
+
+
+static std::expected<struct memoryInfo, ReturnCode> gatherMemoryInfo(void) {
+	struct memoryInfo mmi;
+
+	MEMORYSTATUSEX statex{};
+	statex.dwLength = sizeof(statex);
+
+	if (!GlobalMemoryStatusEx(&statex)) {
+		printf("FAIL: GlobalMemoryStatusEx failed");
+		return std::unexpected(ReturnCode::UnexpectedError);
+	}
+
+	mmi.freeRamKB = statex.ullAvailPhys / 1024;
+
+	if (!GetPhysicallyInstalledSystemMemory(&mmi.totalRamKB)) {
+		printf("FAIL: GetPhysicallyInstalledSystemMemory failed");
+		return std::unexpected(ReturnCode::UnexpectedError);
+	}
+
+	return mmi;
+}
+
+
+static ReturnCode localRun(void) {
+	auto osi = gatherOSInfo();
+	if (!osi) {
+		printf("FAIL: Couldn't gather OSInfo\n");
+		return ReturnCode::UnexpectedError;
+	}
+
+	printf("OS Version: %u.%u.%u\n",
+		osi.value().dwMajorVersion,
+		osi.value().dwMinorVersion,
+		osi.value().dwBuildNumber
+	);
+
+	auto stime = gatherUnixTime();
+	if (!stime) {
+		printf("FAIL: Couldn't gather UNIX time\n");
+		return ReturnCode::UnexpectedError;
+	}
+
+	printf("Unix time: %llu\n", stime.value().time);
+
+	auto utime = gatherUptime();
+	if (!utime) {
+		printf("FAIL: Couldn't gather uptime\n");
+		return ReturnCode::UnexpectedError;
+	}
+
+	printf("Uptime: %llu\n", utime.value().uptime);
+
+	auto memi = gatherMemoryInfo();
+	if (!memi) {
+		printf("FAIL: Couldn't gather memory info\n");
+		return ReturnCode::UnexpectedError;
+	}
+
+	printf("Memory: %llu/%llu\n",
+		memi.value().freeRamKB,
+		memi.value().totalRamKB
+	);
+
+	// TODO
+
+	return ReturnCode::Success;
 }
 
 
 int main(void)
 {
+	if (localRun() != ReturnCode::Success) {
+		printf("FAIL: local test run failed");
+		return EXIT_FAILURE;
+	}
+
 	// TODO
 
 	return EXIT_SUCCESS;
