@@ -10,7 +10,7 @@
 
 		- bcrypt.h is used instead of deprecated crypt32.h
 
-		- cross-platform chrono::system_clock used to get unixTime
+		- cross-platform std::chrono::system_clock used to get unixTime
 			GetTickCount64() still used as more reliable way to get uptime
 
 		- RtlGetVersion from "ntdll.dll" used 
@@ -22,8 +22,10 @@
 		- GetPhysicallyInstalledSystemMemory() used in addition 
 			to GlobalMemoryStatusEx() to get precise amt of RAM
 
-		- GetDriveTypeW() and GetDiskFreeSpaceExW() used 
-			instead of deprecated functions
+		- GetDriveTypeW() used instead of deprecated function
+		
+		- cross-platform std::filesystem::space 
+		used instead of GetDiskFreeSpaceExW()
 
 ******************************************************************************/
 
@@ -34,21 +36,27 @@
 // NOMINMAX and WIN32_LEAN_AND_MEAN moved to CMakeLists.txt
 
 
-#include <cstdio>	// REPLACED
-#include <cstdlib>	// ADDED
-#include <expected>	// ADDED
+#include <cstdio>		// REPLACED
+#include <cstdlib>		// ADDED
+#include <expected>		// ADDED
+#include <print>		// ADDED
+#include <memory>		// ADDED
+#include <utility>		// ADDED
 
-#include <chrono>	// ADDED
+#include <iostream>		// ADDED for wcout + format
 
-#include <AclAPI.h> // ADDED
-#include <lmcons.h>	// ADDED
+#include <chrono>		// ADDED
+#include <filesystem>	// ADDED
+
+#include <AclAPI.h>		// ADDED
+#include <lmcons.h>		// ADDED
 
 #include <Windows.h>
 #include <WinSock2.h>
 #include <MSWSock.h>
 #include <WS2tcpip.h>	// ADDED
 
-#include <bcrypt.h>	// ADDED
+#include <bcrypt.h>		// ADDED
 
 
 #pragma comment(lib, "ws2_32.lib")
@@ -56,4 +64,4 @@
 #pragma comment(lib, "bcrypt.lib")	// ADDED
 
 
-typedef NTSTATUS(WINAPI* PFN_RtlGetVersion)(POSVERSIONINFOW);
+using PFN_RtlGetVersion = NTSTATUS(WINAPI*)(POSVERSIONINFOW);

@@ -2,6 +2,8 @@
 
 	SMIT5-1.cpp: console application entry point --- SERVER
 
+	C++23
+
 	|	Distributed PC info collection system, 
 	|	employing sockets for communication.
 
@@ -101,13 +103,18 @@
 
 
 #include "SMIT5-1.h"
-#include "SharedStructs.h"
+#include "SMIT5-1Shared.h"
 
 
 // CONSTANTS	===============================================================
 // also see header file
-// TODO
 
+// used for local run's ACEInfo folder/file request
+inline constexpr auto TEST_FILEPATH = L"S:\\Files";
+
+// used for local run's ACEInfo reg key request
+inline constexpr auto TEST_RKEY = HKEY_CURRENT_USER;
+inline constexpr auto TEST_REGPATH = L"SOFTWARE";
 
 // GLOBALS	===================================================================
 // TODO
@@ -117,86 +124,84 @@
 
 
 // PROTOTYPES	===============================================================
-static std::expected<struct OSInfo, ReturnCode> gatherOSInfo(void);
-static std::expected<struct systemTimeInfo, ReturnCode> gatherUnixTime(void);
-static std::expected<struct uptimeInfo, ReturnCode> gatherUptime(void);
-static std::expected<struct memoryInfo, ReturnCode> gatherMemoryInfo(void);
+[[nodiscard]] static std::expected<OSInfo, ReturnCode> gatherOSInfo();
+[[nodiscard]] static std::expected<systemTimeInfo, ReturnCode> gatherUnixTime();
+[[nodiscard]] static std::expected<uptimeInfo, ReturnCode> gatherUptime();
+[[nodiscard]] static std::expected<memoryInfo, ReturnCode> gatherMemoryInfo();
+[[nodiscard]] static std::expected<disksInfo, ReturnCode> gatherDisksInfo();
+[[nodiscard]] static std::expected<freeSpaceInfo, ReturnCode> gatherFreeSpaceInfo();
+[[nodiscard]] static std::expected<std::vector<ACEInfo>, ReturnCode> gatherACEInfo(request);
+[[nodiscard]] static std::expected<std::vector<ownerInfo>, ReturnCode> gatherOwnerInfo(request);
 
-static ReturnCode localRun(void);
+[[nodiscard]] static ReturnCode localRun();
 
 // FUNCTIONS	===============================================================
-// ==== Gathering functions
-static std::expected<struct OSInfo, ReturnCode> gatherOSInfo(void) {
-	struct OSInfo osi;
-	
-	HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
-	if (!hNtdll) {
-		printf("FAIL: Unable to get ntdll.dll\n");
+static std::expected<OSInfo, ReturnCode> gatherOSInfo() {
+	// RAII-wrapper for HMODULE
+	struct LibraryDeleter {
+		void operator()(HMODULE h) const { if (h) FreeLibrary(h); }
+	};
+
+	std::unique_ptr<std::remove_pointer_t<HMODULE>, LibraryDeleter> \
+		ntdll{ LoadLibraryW(L"ntdll.dll") };
+
+	if (!ntdll) {
+		std::println(stderr, "FAIL: Unable to load ntdll.dll");
 		return std::unexpected(ReturnCode::UnexpectedError);
 	}
 
-	auto pRtlGetVersion = reinterpret_cast<PFN_RtlGetVersion>(
-		GetProcAddress(hNtdll, "RtlGetVersion")
+	auto pRtlGetVersion = std::bit_cast<PFN_RtlGetVersion>(
+		GetProcAddress(ntdll.get(), "RtlGetVersion")
 	);
 
 	if (!pRtlGetVersion) {
-		printf("FAIL: Couldn't resolve RtlGetVersion address\n");
+		std::println(stderr, "FAIL: Couldn't resolve RtlGetVersion address");
 		return std::unexpected(ReturnCode::UnexpectedError);
 	}
 
-	RTL_OSVERSIONINFOW osvi = { 0 };
-	osvi.dwOSVersionInfoSize = sizeof(osvi);
+	RTL_OSVERSIONINFOW osvi{ .dwOSVersionInfoSize = sizeof(RTL_OSVERSIONINFOW) };
 
-	if (BCRYPT_SUCCESS(pRtlGetVersion(&osvi))) {
-		osi.dwMajorVersion = osvi.dwMajorVersion;
-		osi.dwMinorVersion = osvi.dwMinorVersion;
-		osi.dwBuildNumber = osvi.dwBuildNumber;
-	}
-	else {
-		printf("FAIL: RtlGetVersion failed\n");
+	if (!BCRYPT_SUCCESS(pRtlGetVersion(&osvi))) {
+		std::println(stderr, "FAIL: RtlGetVersion failed");
 		return std::unexpected(ReturnCode::UnexpectedError);
 	}
 
-	return osi;
+	return OSInfo{
+		.dwMajorVersion = osvi.dwMajorVersion,
+		.dwMinorVersion = osvi.dwMinorVersion,
+		.dwBuildNumber = osvi.dwBuildNumber
+	};
 }
 
 
-static std::expected<struct systemTimeInfo, ReturnCode> gatherUnixTime(void) {
-	struct systemTimeInfo sti;
+static std::expected<systemTimeInfo, ReturnCode> gatherUnixTime() {
+	const auto now = std::chrono::system_clock::now();
+	const auto seconds = std::chrono::duration_cast<std::chrono::seconds> \
+		(now.time_since_epoch()).count();
 
-	auto now = std::chrono::system_clock::now();
-
-	sti.time = std::chrono::duration_cast<std::chrono::seconds>(
-		now.time_since_epoch()
-	).count();
-
-	return sti;
+	return systemTimeInfo{ .timeS = static_cast<uint64_t>(seconds) };
 }
 
 
-static std::expected<struct uptimeInfo, ReturnCode> gatherUptime(void) {
-	struct uptimeInfo uti;
-	uti.uptime = GetTickCount64();
-
-	return uti;
+static std::expected<uptimeInfo, ReturnCode> gatherUptime() {
+	return uptimeInfo{ .uptimeMs = GetTickCount64() };
 }
 
 
-static std::expected<struct memoryInfo, ReturnCode> gatherMemoryInfo(void) {
-	struct memoryInfo mmi;
-
-	MEMORYSTATUSEX statex{};
-	statex.dwLength = sizeof(statex);
+static std::expected<memoryInfo, ReturnCode> gatherMemoryInfo() {
+	MEMORYSTATUSEX statex{ .dwLength = sizeof(MEMORYSTATUSEX) };
 
 	if (!GlobalMemoryStatusEx(&statex)) {
-		printf("FAIL: GlobalMemoryStatusEx failed");
+		std::println(stderr, "FAIL: GlobalMemoryStatusEx failed");
 		return std::unexpected(ReturnCode::UnexpectedError);
 	}
 
-	mmi.freeRamKB = statex.ullAvailPhys / 1024;
+	memoryInfo mmi{
+		.freeRamBytes = statex.ullAvailPhys
+	};
 
 	if (!GetPhysicallyInstalledSystemMemory(&mmi.totalRamKB)) {
-		printf("FAIL: GetPhysicallyInstalledSystemMemory failed");
+		std::println(stderr, "FAIL: GetPhysicallyInstalledSystemMemory failed");
 		return std::unexpected(ReturnCode::UnexpectedError);
 	}
 
@@ -204,45 +209,176 @@ static std::expected<struct memoryInfo, ReturnCode> gatherMemoryInfo(void) {
 }
 
 
-static ReturnCode localRun(void) {
-	auto osi = gatherOSInfo();
+static std::expected<disksInfo, ReturnCode> gatherDisksInfo() {
+	disksInfo di{ .leDiskMask = GetLogicalDrives() };
+
+	if (!di.leDiskMask) {
+		std::println(stderr, "FAIL: GetLogicalDrives failed");
+		return std::unexpected(ReturnCode::UnexpectedError);
+	}
+
+	for (int i = 0; i < MAX_DISKS_COUNT; i++) {
+		if (!((di.leDiskMask >> i) & 0b1)) continue;
+
+		auto diskName = getDiskNameFromIndex(i);
+		
+		if (!diskName) {
+			std::println(stderr, "FAIL: Couldn't get disk's name from index");
+			return std::unexpected(diskName.error());
+		}
+
+		di.diskTypes[i] = GetDriveTypeW(diskName.value().c_str());
+
+		// GetVolumeInformationW requires fixed-size buffer
+		di.fileSystemNames[i].resize(MAX_PATH + 1, L'\0');
+
+		if (!GetVolumeInformationW(
+			diskName.value().c_str(),
+			nullptr,
+			0,
+			nullptr,
+			nullptr,
+			nullptr,
+			di.fileSystemNames[i].data(),
+			static_cast<DWORD>(di.fileSystemNames[i].size())
+		)) {
+			std::println(stderr, "FAIL: GetVolumeInformationW failed");
+			return std::unexpected(ReturnCode::UnexpectedError);
+		}
+
+		// reducing buffer to actual size
+		di.fileSystemNames[i].resize(std::wcslen(di.fileSystemNames[i].c_str()));
+	}
+
+	return di;
+}
+
+
+static std::expected<freeSpaceInfo, ReturnCode> gatherFreeSpaceInfo() {
+	freeSpaceInfo fsi{ .leDiskMask = GetLogicalDrives() };
+
+	if (!fsi.leDiskMask) {
+		std::println(stderr, "FAIL: GetLogicalDrives failed");
+		return std::unexpected(ReturnCode::UnexpectedError);
+	}
+
+	for (int i = 0; i < MAX_DISKS_COUNT; i++) {
+		if (!((fsi.leDiskMask >> i) & 0b1)) continue;
+
+		auto diskName = getDiskNameFromIndex(i);
+
+		if (!diskName) {
+			std::println(stderr, "FAIL: Couldn't get disk's name from index");
+			return std::unexpected(diskName.error());
+		}
+
+		fsi.freeBytes[i] = std::filesystem::space(diskName.value()).free;
+	}
+
+	return fsi;
+}
+
+
+static std::expected<std::vector<ACEInfo>, ReturnCode> gatherACEInfo(request req) {
+	std::vector<ACEInfo> acei{};
+
+	// TODO
+
+	return acei;
+}
+
+
+static std::expected<std::vector<ownerInfo>, ReturnCode> gatherOwnerInfo(request req) {
+	std::vector<ownerInfo> oi{};
+
+	// TODO
+
+	return oi;
+}
+
+
+static ReturnCode localRun() {
+	const auto osi = gatherOSInfo();
 	if (!osi) {
-		printf("FAIL: Couldn't gather OSInfo\n");
-		return ReturnCode::UnexpectedError;
+		std::println(stderr, "FAIL: Couldn't gather OSInfo");
+		return osi.error();
 	}
 
-	printf("OS Version: %u.%u.%u\n",
-		osi.value().dwMajorVersion,
-		osi.value().dwMinorVersion,
-		osi.value().dwBuildNumber
+	std::println("OS Version: {}.{}.{}",
+		osi->dwMajorVersion,
+		osi->dwMinorVersion,
+		osi->dwBuildNumber
 	);
 
-	auto stime = gatherUnixTime();
+	const auto stime = gatherUnixTime();
 	if (!stime) {
-		printf("FAIL: Couldn't gather UNIX time\n");
-		return ReturnCode::UnexpectedError;
+		std::println(stderr, "FAIL: Couldn't gather UNIX time");
+		return stime.error();
 	}
 
-	printf("Unix time: %llu\n", stime.value().time);
+	std::println("Unix time: {}", stime->timeS);
 
-	auto utime = gatherUptime();
+	const auto utime = gatherUptime();
 	if (!utime) {
-		printf("FAIL: Couldn't gather uptime\n");
-		return ReturnCode::UnexpectedError;
+		std::println(stderr, "FAIL: Couldn't gather uptime");
+		return utime.error();
 	}
 
-	printf("Uptime: %llu\n", utime.value().uptime);
+	std::println("Uptime: {}", utime->uptimeMs);
 
-	auto memi = gatherMemoryInfo();
+	const auto memi = gatherMemoryInfo();
 	if (!memi) {
-		printf("FAIL: Couldn't gather memory info\n");
-		return ReturnCode::UnexpectedError;
+		std::println(stderr, "FAIL: Couldn't gather memoryInfo");
+		return memi.error();
 	}
 
-	printf("Memory: %llu/%llu\n",
-		memi.value().freeRamKB,
-		memi.value().totalRamKB
+	std::println("Memory: {} / {} KB ",
+		memi->freeRamBytes / 1024,
+		memi->totalRamKB
 	);
+
+	const auto di = gatherDisksInfo();
+	if (!di) {
+		std::println(stderr, "FAIL: Couldn't gather disksInfo");
+		return di.error();
+	}
+
+	std::print("\n");
+
+	for (int i = 0; i < MAX_DISKS_COUNT; i++) {
+		if (!((di->leDiskMask >> i) & 0b1)) continue;
+
+		// workaround to format std::wstring
+		std::wcout << std::format(L"Disk {}: {} ({})",
+			i, di->diskTypes[i], di->fileSystemNames[i]) << '\n';
+	}
+
+	const auto fsi = gatherFreeSpaceInfo();
+	if (!fsi) {
+		std::println(stderr, "FAIL: Couldn't gather freeSpaceInfo");
+		return fsi.error();
+	}
+
+	std::print("\n");
+
+	for (int i = 0; i < MAX_DISKS_COUNT; i++) {
+		if (!((fsi->leDiskMask >> i) & 0b1)) continue;
+
+		std::println("Disk {}: {} bytes free", i, fsi->freeBytes[i]);
+	}
+
+	request ACEFileRequest = {
+		.type = RequestType::ACEFile,
+		.path = TEST_FILEPATH
+	};
+
+	const auto acei = gatherACEInfo(ACEFileRequest);
+	if (!acei) {
+		std::println(stderr, "FAIL: Couldn't gather ACEInfo for a file");
+		return acei.error();
+	}
+
+	std::print("\n");
 
 	// TODO
 
@@ -250,7 +386,7 @@ static ReturnCode localRun(void) {
 }
 
 
-int main(void)
+int main()
 {
 	if (localRun() != ReturnCode::Success) {
 		printf("FAIL: local test run failed");

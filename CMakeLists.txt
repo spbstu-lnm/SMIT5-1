@@ -20,4 +20,4 @@ add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX WIN32_NO_STATUS)
 
 
 # Добавьте источник в исполняемый файл этого проекта.
-add_executable (SMIT5-1 "SMIT5-1.cpp" "SMIT5-1.h" "SharedStructs.h")
+add_executable (SMIT5-1 "SMIT5-1.cpp" "SMIT5-1.h" "SMIT5-1Shared.h")
