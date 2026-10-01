@@ -1,17 +1,17 @@
 ﻿/******************************************************************************
 
-	SMIT5-1.cpp: console application entry point --- SERVER
+	SMIT5-1.cpp : console application entry point --- SERVER
 
 	C++23
 
-	|	Distributed PC info collection system, 
+	|	Distributed PC info collection system,
 	|	employing sockets for communication.
 
 
 	ARCHITECTURE:
 		- system works in a local network
-		
-		- client (central PC) collects information about 
+
+		- client (central PC) collects information about
 			remaining PCs in the network
 
 		- info is collected automatically (by default)
@@ -25,41 +25,42 @@
 			client only requests info when it is able to accept it
 
 		* SERVERS ARE ALWAYS READY TO ACCEPT CLIENT'S REQUEST
-			when client is ready to receive info 
+			when client is ready to receive info
 			and sends a request --- servers respond
-		
+
 		* SERVER IS STATELESS
 			stateless servers are easier to maintain and more fault tolerant
 
-	
+
 	COLLECTED INFO:
 		- Type and version of OS
 
 		- Current time
-		
+
 		- Time passed from OS startup
-		
-		- memory info (total + free) 
-		
+
+		- memory info (total + free)
+
 		- types of connected disks (local/network/removable) + file system
-		
+
 		- free space on local disks
-		
+
 		- access rights (as a string) to a specified file / folder / reg key
 
 		- owner of a file / folder / reg key
 
-	
+
 	PROTOCOL:
-		see structs in header file
+		see SMIT5-1Shared.h for the data structs and SMIT5-1Protocol.h for
+		the wire (de)serialization format
 
 
 	GENERAL REQUIREMENTS:
 		- must use sockets (WinSock, not wrappers from MFC libs or similar)
-		
+
 		- must implement separate query (request) for each type of info
 
-		- replies must be suitable for automated processing, 
+		- replies must be suitable for automated processing,
 			not only human-readable
 
 
@@ -68,9 +69,9 @@
 
 		- must be a non-interactive console application (daemon)
 
-		- must output logs to console 
+		- must output logs to console
 			* connection/disconnection of clients
-			* received and processed queries\
+			* received and processed queries
 
 		- must use Win32 IO Completion Ports for parallel query handling
 
@@ -78,10 +79,10 @@
 	ENCRYPTION REQUIREMENTS:
 		- must encrypt all messages between client and server with CryptoAPI
 
-		- must use one of symmetric encryption algorithms with session key 
+		- must use one of symmetric encryption algorithms with session key
 			to send data
 
-		- must use one of assymetric encryption algorithms 
+		- must use one of assymetric encryption algorithms
 			to set up session key
 
 
@@ -96,14 +97,21 @@
 
 	NOTES:
 		- bcrypt.h used for data protection instead of deprecated crypt32.h
+			(see SMIT5-1Crypto.h for the handshake + AES-GCM implementation)
 
 		- IO Completion Ports used to handle many users at once
+			(see SMIT5-1Server.cpp)
+
+		- info-gathering functions are moved to SMIT5-1Info.h/.cpp
+			(shared between localRun() and the network server)
 
 ******************************************************************************/
 
 
 #include "SMIT5-1.h"
 #include "SMIT5-1Shared.h"
+#include "SMIT5-1Info.h"
+#include "SMIT5-1Server.h"
 
 
 // CONSTANTS	===============================================================
@@ -113,190 +121,19 @@
 inline constexpr auto TEST_FILEPATH = L"S:\\Files";
 
 // used for local run's ACEInfo reg key request
-inline constexpr auto TEST_RKEY = HKEY_CURRENT_USER;
+// not constexpr (isn't compile-time constant)
+inline const auto TEST_RKEY = HKEY_CURRENT_USER;
 inline constexpr auto TEST_REGPATH = L"SOFTWARE";
 
-// GLOBALS	===================================================================
-// TODO
-
-
-// STRUCTS definition in header file
+// port the server listens on for client connections
+inline constexpr uint16_t SERVER_PORT = 9000;
 
 
 // PROTOTYPES	===============================================================
-[[nodiscard]] static std::expected<OSInfo, ReturnCode> gatherOSInfo();
-[[nodiscard]] static std::expected<systemTimeInfo, ReturnCode> gatherUnixTime();
-[[nodiscard]] static std::expected<uptimeInfo, ReturnCode> gatherUptime();
-[[nodiscard]] static std::expected<memoryInfo, ReturnCode> gatherMemoryInfo();
-[[nodiscard]] static std::expected<disksInfo, ReturnCode> gatherDisksInfo();
-[[nodiscard]] static std::expected<freeSpaceInfo, ReturnCode> gatherFreeSpaceInfo();
-[[nodiscard]] static std::expected<std::vector<ACEInfo>, ReturnCode> gatherACEInfo(request);
-[[nodiscard]] static std::expected<std::vector<ownerInfo>, ReturnCode> gatherOwnerInfo(request);
-
 [[nodiscard]] static ReturnCode localRun();
 
+
 // FUNCTIONS	===============================================================
-static std::expected<OSInfo, ReturnCode> gatherOSInfo() {
-	// RAII-wrapper for HMODULE
-	struct LibraryDeleter {
-		void operator()(HMODULE h) const { if (h) FreeLibrary(h); }
-	};
-
-	std::unique_ptr<std::remove_pointer_t<HMODULE>, LibraryDeleter> \
-		ntdll{ LoadLibraryW(L"ntdll.dll") };
-
-	if (!ntdll) {
-		std::println(stderr, "FAIL: Unable to load ntdll.dll");
-		return std::unexpected(ReturnCode::UnexpectedError);
-	}
-
-	auto pRtlGetVersion = std::bit_cast<PFN_RtlGetVersion>(
-		GetProcAddress(ntdll.get(), "RtlGetVersion")
-	);
-
-	if (!pRtlGetVersion) {
-		std::println(stderr, "FAIL: Couldn't resolve RtlGetVersion address");
-		return std::unexpected(ReturnCode::UnexpectedError);
-	}
-
-	RTL_OSVERSIONINFOW osvi{ .dwOSVersionInfoSize = sizeof(RTL_OSVERSIONINFOW) };
-
-	if (!BCRYPT_SUCCESS(pRtlGetVersion(&osvi))) {
-		std::println(stderr, "FAIL: RtlGetVersion failed");
-		return std::unexpected(ReturnCode::UnexpectedError);
-	}
-
-	return OSInfo{
-		.dwMajorVersion = osvi.dwMajorVersion,
-		.dwMinorVersion = osvi.dwMinorVersion,
-		.dwBuildNumber = osvi.dwBuildNumber
-	};
-}
-
-
-static std::expected<systemTimeInfo, ReturnCode> gatherUnixTime() {
-	const auto now = std::chrono::system_clock::now();
-	const auto seconds = std::chrono::duration_cast<std::chrono::seconds> \
-		(now.time_since_epoch()).count();
-
-	return systemTimeInfo{ .timeS = static_cast<uint64_t>(seconds) };
-}
-
-
-static std::expected<uptimeInfo, ReturnCode> gatherUptime() {
-	return uptimeInfo{ .uptimeMs = GetTickCount64() };
-}
-
-
-static std::expected<memoryInfo, ReturnCode> gatherMemoryInfo() {
-	MEMORYSTATUSEX statex{ .dwLength = sizeof(MEMORYSTATUSEX) };
-
-	if (!GlobalMemoryStatusEx(&statex)) {
-		std::println(stderr, "FAIL: GlobalMemoryStatusEx failed");
-		return std::unexpected(ReturnCode::UnexpectedError);
-	}
-
-	memoryInfo mmi{
-		.freeRamBytes = statex.ullAvailPhys
-	};
-
-	if (!GetPhysicallyInstalledSystemMemory(&mmi.totalRamKB)) {
-		std::println(stderr, "FAIL: GetPhysicallyInstalledSystemMemory failed");
-		return std::unexpected(ReturnCode::UnexpectedError);
-	}
-
-	return mmi;
-}
-
-
-static std::expected<disksInfo, ReturnCode> gatherDisksInfo() {
-	disksInfo di{ .leDiskMask = GetLogicalDrives() };
-
-	if (!di.leDiskMask) {
-		std::println(stderr, "FAIL: GetLogicalDrives failed");
-		return std::unexpected(ReturnCode::UnexpectedError);
-	}
-
-	for (int i = 0; i < MAX_DISKS_COUNT; i++) {
-		if (!((di.leDiskMask >> i) & 0b1)) continue;
-
-		auto diskName = getDiskNameFromIndex(i);
-		
-		if (!diskName) {
-			std::println(stderr, "FAIL: Couldn't get disk's name from index");
-			return std::unexpected(diskName.error());
-		}
-
-		di.diskTypes[i] = GetDriveTypeW(diskName.value().c_str());
-
-		// GetVolumeInformationW requires fixed-size buffer
-		di.fileSystemNames[i].resize(MAX_PATH + 1, L'\0');
-
-		if (!GetVolumeInformationW(
-			diskName.value().c_str(),
-			nullptr,
-			0,
-			nullptr,
-			nullptr,
-			nullptr,
-			di.fileSystemNames[i].data(),
-			static_cast<DWORD>(di.fileSystemNames[i].size())
-		)) {
-			std::println(stderr, "FAIL: GetVolumeInformationW failed");
-			return std::unexpected(ReturnCode::UnexpectedError);
-		}
-
-		// reducing buffer to actual size
-		di.fileSystemNames[i].resize(std::wcslen(di.fileSystemNames[i].c_str()));
-	}
-
-	return di;
-}
-
-
-static std::expected<freeSpaceInfo, ReturnCode> gatherFreeSpaceInfo() {
-	freeSpaceInfo fsi{ .leDiskMask = GetLogicalDrives() };
-
-	if (!fsi.leDiskMask) {
-		std::println(stderr, "FAIL: GetLogicalDrives failed");
-		return std::unexpected(ReturnCode::UnexpectedError);
-	}
-
-	for (int i = 0; i < MAX_DISKS_COUNT; i++) {
-		if (!((fsi.leDiskMask >> i) & 0b1)) continue;
-
-		auto diskName = getDiskNameFromIndex(i);
-
-		if (!diskName) {
-			std::println(stderr, "FAIL: Couldn't get disk's name from index");
-			return std::unexpected(diskName.error());
-		}
-
-		fsi.freeBytes[i] = std::filesystem::space(diskName.value()).free;
-	}
-
-	return fsi;
-}
-
-
-static std::expected<std::vector<ACEInfo>, ReturnCode> gatherACEInfo(request req) {
-	std::vector<ACEInfo> acei{};
-
-	// TODO
-
-	return acei;
-}
-
-
-static std::expected<std::vector<ownerInfo>, ReturnCode> gatherOwnerInfo(request req) {
-	std::vector<ownerInfo> oi{};
-
-	// TODO
-
-	return oi;
-}
-
-
 static ReturnCode localRun() {
 	const auto osi = gatherOSInfo();
 	if (!osi) {
@@ -372,15 +209,83 @@ static ReturnCode localRun() {
 		.path = TEST_FILEPATH
 	};
 
-	const auto acei = gatherACEInfo(ACEFileRequest);
-	if (!acei) {
+	const auto aceFile = gatherACEInfo(ACEFileRequest);
+	if (!aceFile) {
 		std::println(stderr, "FAIL: Couldn't gather ACEInfo for a file");
-		return acei.error();
+		return aceFile.error();
 	}
 
 	std::print("\n");
 
-	// TODO
+	for (const auto& ace : aceFile.value()) {
+		std::wcout << std::format(
+			L"ACE (file): {} | type {} | flags {:#04x} | mask {:#010x}",
+			ace.subjectName, ace.ACEType, ace.ACEFlags, ace.accessMask
+		) << '\n';
+	}
+
+	request ownerFileRequest = {
+		.type = RequestType::OwnerFile,
+		.path = TEST_FILEPATH
+	};
+
+	const auto ownerFile = gatherOwnerInfo(ownerFileRequest);
+	if (!ownerFile) {
+		std::println(stderr, "FAIL: Couldn't gather ownerInfo for a file");
+		return ownerFile.error();
+	}
+
+	std::print("\n");
+
+	for (const auto& owner : ownerFile.value()) {
+		std::wcout << std::format(L"Owner (file): {}", owner.ownerName) << '\n';
+	}
+
+	request ACERegRequest = {
+		.type = RequestType::ACEReg,
+		.path = TEST_REGPATH,
+		.hRootKey = TEST_RKEY
+	};
+
+	const auto aceReg = gatherACEInfo(ACERegRequest);
+	if (!aceReg) {
+		std::println(stderr, "FAIL: Couldn't gather ACEInfo for a reg key");
+		return aceReg.error();
+	}
+
+	std::print("\n");
+
+	for (const auto& ace : aceReg.value()) {
+		std::wcout << std::format(
+			L"ACE (reg): {} | type {} | flags {:#04x} | mask {:#010x}",
+			ace.subjectName, ace.ACEType, ace.ACEFlags, ace.accessMask
+		) << '\n';
+	}
+
+	request ownerRegRequest = {
+		.type = RequestType::OwnerReg,
+		.path = TEST_REGPATH,
+		.hRootKey = TEST_RKEY
+	};
+
+	const auto ownerReg = gatherOwnerInfo(ownerRegRequest);
+	if (!ownerReg) {
+		std::println(stderr, "FAIL: Couldn't gather ownerInfo for a reg key");
+		return ownerReg.error();
+	}
+
+	std::print("\n");
+
+	for (const auto& owner : ownerReg.value()) {
+		std::wcout << std::format(L"Owner (reg): {}", owner.ownerName) << '\n';
+	}
+
+	// separate cleanup for local run
+	// same cleanup as in SMIT5-1Server.cpp
+	for (const auto& ace : aceFile.value())  if (ace.subjectSID) LocalFree(ace.subjectSID);
+	for (const auto& ace : aceReg.value())   if (ace.subjectSID) LocalFree(ace.subjectSID);
+	for (const auto& o : ownerFile.value())  if (o.ownerSID)     LocalFree(o.ownerSID);
+	for (const auto& o : ownerReg.value())   if (o.ownerSID)     LocalFree(o.ownerSID);
 
 	return ReturnCode::Success;
 }
@@ -388,12 +293,21 @@ static ReturnCode localRun() {
 
 int main()
 {
+#ifdef DEBUG
+
 	if (localRun() != ReturnCode::Success) {
 		printf("FAIL: local test run failed");
 		return EXIT_FAILURE;
 	}
 
-	// TODO
+#else
+
+	if (!runServer(SERVER_PORT)) {
+		std::println(stderr, "FAIL: server failed to start");
+		return EXIT_FAILURE;
+	}
+
+#endif // DEBUG
 
 	return EXIT_SUCCESS;
 }

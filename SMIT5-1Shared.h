@@ -97,7 +97,28 @@ struct request {
 };
 
 
-[[nodiscard]] std::expected<std::wstring, ReturnCode> getDiskNameFromIndex(int idx) {
+// PROTOCOL / WIRE FORMAT
+// see SMIT5-1Protocol.h for (de)serialization realizations
+
+// top-level kind of a framed message exchanged over the socket
+enum class MessageType : uint8_t {
+	HandshakeInit = 1,		// c -> s: client's ECDH public key (plaintext)
+	HandshakeResponse = 2,	// s -> c: server's ECDH public key (plaintext)
+	Request = 3,			// c -> s: AES-GCM encrypted request
+	Response = 4,			// s -> c: AES-GCM encrypted response (status + payload)
+};
+
+// check if registry root is valid
+[[nodiscard]] inline bool isAllowedPredefinedRoot(HKEY hKey) {
+	return hKey == HKEY_CLASSES_ROOT
+		|| hKey == HKEY_CURRENT_USER
+		|| hKey == HKEY_LOCAL_MACHINE
+		|| hKey == HKEY_USERS
+		|| hKey == HKEY_CURRENT_CONFIG;
+}
+
+
+[[nodiscard]] inline std::expected<std::wstring, ReturnCode> getDiskNameFromIndex(int idx) {
 	if (idx < 0 || idx >= static_cast<int>(MAX_DISKS_COUNT)) {
 		std::println(stderr, "FAIL: disk index lies outside of allowed range");
 		return std::unexpected(ReturnCode::InvalidValue);
